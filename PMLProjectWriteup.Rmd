@@ -1,0 +1,144 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Abhijit Shetti"
+date: "August 23, 2015"
+output: html_document
+---
+
+## Introduction
+There is a growing adoption of devices that measure physical movement using sensors attached to the human body. These devices allow one to track movement while one goes about their regular work or exercise. A large number of health conscious individuals are using these devices to meaure their physical activity when they exercise. 
+
+While the devices track movement and report on it, they do not give any indication of how well the exercies is being done. In this project, we will use data collected from participants who used the devices while performing a specific exercise (dumbbell curl) both correctly and with five common mistakes individuals make while performing this exercise. The intent is to build a model that will predict from the device data whether the individual performed the exercise correctly or else the specific mistake they made.
+
+## Load Data
+
+We will use the data set from the study made available at http://groupware.les.inf.puc-rio.br/har. 
+
+### Download Data
+Lets get the data files and store them locally for later use.
+
+```{r, cache=TRUE}
+library(caret,quietly = TRUE)
+library(rpart,quietly = TRUE)
+library(rpart.plot,quietly = TRUE)
+library(randomForest,quietly = TRUE)
+library(corrplot,quietly = TRUE)
+library(plyr,quietly = TRUE)
+dataDir <- "./Data"
+trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+trainFile <- paste0(dataDir,"/pml-training.csv")
+testFile  <- paste0(dataDir,"/pml-testing.csv")
+if (!file.exists(dataDir)) {
+  dir.create(dataDir)
+}
+if (!file.exists(trainFile)) {
+  download.file(trainUrl, destfile=trainFile, method="curl")
+}
+if (!file.exists(testFile)) {
+  download.file(testUrl, destfile=testFile, method="curl")
+}
+```
+
+### Read the data files
+Lets read in the data files into a data frame and get a summary of what they contain
+
+```{r, cache=TRUE}
+trainData <- read.csv("./data/pml-training.csv",header=TRUE)
+testData <- read.csv("./data/pml-testing.csv",header=TRUE)
+```
+
+We use read.csv to load the data into a data frame object. Note the stringsAsFactors argument - we do not want any string data to be read as Factors yet.
+
+### Explore and clean the data
+Lets compare the column names in each data set and see which ones are not equal
+```{r, cache=TRUE}
+print(paste0("Test Data Columns: ",length(colnames(testData))," Train Data Columns: ",
+             length(colnames(trainData))))
+identical(colnames(testData),colnames(trainData))
+diffColumns <- which(colnames(trainData)!=colnames(testData))
+colnames(testData)[diffColumns]
+colnames(trainData)[diffColumns]
+```
+
+We see the last column is named differently in the two data sets. This is our outcome column, which we shall be predicting with our chosen machine learning algorithm.
+Lets first preprocess the data and select our feature set to make it ready for analysis.
+Lets remove columns with NA values
+```{r, cache = TRUE}
+nmissing <- function(x) sum(is.na(x))
+colwiseMissing <- colwise(nmissing)(trainData)
+sparseColIndices <- which(colwiseMissing > 0)
+sparseCols <- colnames(trainData)[sparseColIndices]
+noNAtrainData <- trainData[,!(colnames(trainData) %in% sparseCols)]
+noNAtestData <- testData[,!(colnames(testData) %in% sparseCols)]
+```
+
+Next, lets remove near zero variables from the data set. These will not add to the model accuracy.
+```{r, cache = TRUE}
+nzv <- nearZeroVar(noNAtrainData,saveMetrics = TRUE)
+nearZeroCols <- rownames(nzv)[nzv$nzv==TRUE]
+nonZeroNATrainData <- noNAtrainData[,!(colnames(noNAtrainData) %in% nearZeroCols)]
+nonZeroNATestData <- noNAtestData[,!(colnames(noNAtestData) %in% nearZeroCols)]
+```
+
+## Model selection and data slicing
+
+We shall try a couple of different models on the data given. Since the outcomes are categorical, we shall select from among models best used for classification rather than regression. One of the most commonly used models is Random Forest. Lets try a couple of different models with different parameters and select from among them based on the model performance. We will use cross validation within each model fit to ensure we dont overfit.  
+
+To do this, we will use the createFolds method to create two folds each to serve as the training and test sets.
+
+```{r, cache = TRUE}
+set.seed(1212)
+trainFolds <- createFolds(y=nonZeroNATrainData$classe,k=2,returnTrain=TRUE)
+testFolds <- createFolds(y=nonZeroNATrainData$classe,k=2,returnTrain=FALSE) 
+```
+
+## Model fit and evaluation
+
+First we will apply Random Forest with the first fold and 50 trees.
+
+```{r, cache = TRUE}
+data <- nonZeroNATrainData[trainFolds$Fold1,]
+modelFit1 <- train(data$classe~.,method="rf", ntree=50, trControl=trainControl(method="cv", 
+                  number=10), data=data[,-c(1:6,59)])
+```
+
+Lets check the model fit.
+
+```{r, cache = TRUE}
+plot(modelFit1$finalModel, main= "Error Rates")
+```
+
+
+Now lets apply Random Forest with the second fold and 100 trees with 5 fold cross validation
+
+```{r, cache = TRUE}
+data <- nonZeroNATrainData[trainFolds$Fold2,]
+modelFit2 <- train(data$classe~.,method="rf", ntree=100, trControl=trainControl(method="cv", number=5), data=data[,-c(1:6,59)])
+```
+
+Lets check the model fit.
+```{r, cache = TRUE}
+plot(modelFit2$finalModel, main= "Error Rates")
+```
+
+
+## Chosen Model Out of Sample Error Estimate
+We will use the first model as it already has very low error rates, and takes a much smaller time to finish.
+Lets print the confusion matrix to see the individual exercise class error and the overall accuracy and error rate.
+```{r, cache=TRUE}
+testData<-nonZeroNATrainData[testFolds$Fold1,]
+conMatrix <- confusionMatrix(testData$classe,predict(modelFit1,testData))
+print(conMatrix$table)
+print(conMatrix$overall)
+```
+
+Our estimated accuracy is 99.6% and the out of sample error estimate is 0.4%.
+
+## Results
+Lets apply the model fit above to our test data.
+```{r, cache=TRUE}
+predict(modelFit1,nonZeroNATestData)
+```
+
+This is the resultant prediction on the test data which we shall submit as our predicted values.
